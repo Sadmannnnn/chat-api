@@ -1,0 +1,14 @@
+"""
+API маршруты приложения.
+
+Структура:
+- v1: версия 1 API
+  - endpoints: конечные точки API
+    - chats.py: эндпоинты для работы с чатами
+    - messages.py: эндпоинты для работы с сообщениями
+"""
+
+from app.api.v1.endpoints import chats, messages
+
+# Экспорт всех маршрутизаторов
+__all__ = ["chats", "messages"]
