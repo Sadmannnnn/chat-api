@@ -1,0 +1,242 @@
+from typing import Any, Dict, Generic, List, Optional, Type, TypeVar, Union
+from fastapi.encoders import jsonable_encoder
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+from sqlalchemy import and_
+
+from app.models.base import Base
+
+ModelType = TypeVar("ModelType", bound=Base)
+CreateSchemaType = TypeVar("CreateSchemaType", bound=BaseModel)
+UpdateSchemaType = TypeVar("UpdateSchemaType", bound=BaseModel)
+
+
+class CRUDBase(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
+    """
+    Базовый класс для CRUD операций с моделями.
+    
+    Generic параметры:
+        ModelType: SQLAlchemy модель
+        CreateSchemaType: Pydantic схема для создания
+        UpdateSchemaType: Pydantic схема для обновления
+    """
+    
+    def __init__(self, model: Type[ModelType]):
+        """
+        Инициализация CRUD класса.
+        
+        Args:
+            model: SQLAlchemy модель
+        """
+        self.model = model
+    
+    def get(self, db: Session, id: Any) -> Optional[ModelType]:
+        """
+        Получить объект по ID.
+        
+        Args:
+            db: Сессия базы данных
+            id: Идентификатор объекта
+            
+        Returns:
+            Optional[ModelType]: Найденный объект или None
+        """
+        return db.query(self.model).filter(self.model.id == id).first()
+    
+    def get_multi(
+        self,
+        db: Session,
+        *,
+        skip: int = 0,
+        limit: int = 100,
+        filters: Optional[List] = None,
+        order_by: Optional[Any] = None
+    ) -> List[ModelType]:
+        """
+        Получить список объектов с пагинацией и фильтрацией.
+        
+        Args:
+            db: Сессия базы данных
+            skip: Количество пропускаемых записей
+            limit: Количество возвращаемых записей
+            filters: Список фильтров SQLAlchemy
+            order_by: Поле для сортировки
+            
+        Returns:
+            List[ModelType]: Список объектов
+        """
+        query = db.query(self.model)
+        
+        # Применяем фильтры
+        if filters:
+            query = query.filter(and_(*filters))
+        
+        # Применяем сортировку
+        if order_by:
+            query = query.order_by(order_by)
+        
+        # Применяем пагинацию
+        return query.offset(skip).limit(limit).all()
+    
+    def get_by_field(
+        self,
+        db: Session,
+        *,
+        field_name: str,
+        field_value: Any
+    ) -> Optional[ModelType]:
+        """
+        Получить объект по значению поля.
+        
+        Args:
+            db: Сессия базы данных
+            field_name: Название поля
+            field_value: Значение поля
+            
+        Returns:
+            Optional[ModelType]: Найденный объект или None
+        """
+        field = getattr(self.model, field_name, None)
+        if field is None:
+            raise AttributeError(f"Модель {self.model.__name__} не имеет поля {field_name}")
+        
+        return db.query(self.model).filter(field == field_value).first()
+    
+    def create(self, db: Session, *, obj_in: CreateSchemaType) -> ModelType:
+        """
+        Создать новый объект.
+        
+        Args:
+            db: Сессия базы данных
+            obj_in: Данные для создания объекта
+            
+        Returns:
+            ModelType: Созданный объект
+        """
+        obj_in_data = jsonable_encoder(obj_in)
+        db_obj = self.model(**obj_in_data)
+        
+        db.add(db_obj)
+        db.commit()
+        db.refresh(db_obj)
+        
+        return db_obj
+    
+    def update(
+        self,
+        db: Session,
+        *,
+        db_obj: ModelType,
+        obj_in: Union[UpdateSchemaType, Dict[str, Any]]
+    ) -> ModelType:
+        """
+        Обновить существующий объект.
+        
+        Args:
+            db: Сессия базы данных
+            db_obj: Объект для обновления
+            obj_in: Данные для обновления
+            
+        Returns:
+            ModelType: Обновленный объект
+        """
+        obj_data = jsonable_encoder(db_obj)
+        
+        if isinstance(obj_in, dict):
+            update_data = obj_in
+        else:
+            update_data = obj_in.model_dump(exclude_unset=True)
+        
+        for field in obj_data:
+            if field in update_data:
+                setattr(db_obj, field, update_data[field])
+        
+        db.add(db_obj)
+        db.commit()
+        db.refresh(db_obj)
+        
+        return db_obj
+    
+    def remove(self, db: Session, *, id: int) -> Optional[ModelType]:
+        """
+        Удалить объект по ID.
+        
+        Args:
+            db: Сессия базы данных
+            id: Идентификатор объекта
+            
+        Returns:
+            Optional[ModelType]: Удаленный объект или None если не найден
+        """
+        obj = db.query(self.model).get(id)
+        if obj:
+            db.delete(obj)
+            db.commit()
+        return obj
+    
+    def count(self, db: Session, filters: Optional[List] = None) -> int:
+        """
+        Подсчитать количество объектов с фильтрацией.
+        
+        Args:
+            db: Сессия базы данных
+            filters: Список фильтров SQLAlchemy
+            
+        Returns:
+            int: Количество объектов
+        """
+        query = db.query(self.model)
+        
+        if filters:
+            query = query.filter(and_(*filters))
+        
+        return query.count()
+    
+    def exists(self, db: Session, *, id: int) -> bool:
+        """
+        Проверить существование объекта по ID.
+        
+        Args:
+            db: Сессия базы данных
+            id: Идентификатор объекта
+            
+        Returns:
+            bool: True если объект существует
+        """
+        return db.query(self.model).filter(self.model.id == id).first() is not None
+    
+    def get_or_create(
+        self,
+        db: Session,
+        *,
+        defaults: Optional[Dict[str, Any]] = None,
+        **kwargs
+    ) -> tuple[ModelType, bool]:
+        """
+        Получить объект или создать его если не существует.
+        
+        Args:
+            db: Сессия базы данных
+            defaults: Значения по умолчанию для создания
+            **kwargs: Параметры для поиска
+            
+        Returns:
+            tuple[ModelType, bool]: (Объект, был ли создан новый)
+        """
+        obj = db.query(self.model).filter_by(**kwargs).first()
+        
+        if obj:
+            return obj, False
+        
+        # Создаем новый объект
+        create_data = kwargs.copy()
+        if defaults:
+            create_data.update(defaults)
+        
+        db_obj = self.model(**create_data)
+        
+        db.add(db_obj)
+        db.commit()
+        db.refresh(db_obj)
+        
+        return db_obj, True
