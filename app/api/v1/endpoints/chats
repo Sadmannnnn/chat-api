@@ -1,0 +1,340 @@
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from sqlalchemy.orm import Session
+from sqlalchemy import desc
+
+from app.database import get_db
+from app.models.chat import Chat
+from app.models.message import Message
+from app.schemas.chat import (
+    ChatCreate,
+    ChatResponse,
+    ChatWithMessagesResponse,
+)
+from app.schemas.message import MessageResponse
+from app.config import settings
+
+router = APIRouter()
+
+
+@router.post(
+    "/",
+    response_model=ChatResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Создать новый чат",
+    description="Создает новый чат с указанным названием. Название должно быть от 1 до 200 символов.",
+    responses={
+        200: {"description": "Чат успешно создан"},
+        422: {"description": "Ошибка валидации входных данных"},
+    },
+)
+async def create_chat(
+    chat_data: ChatCreate,
+    db: Session = Depends(get_db),
+) -> ChatResponse:
+    """
+    Создать новый чат.
+    
+    Args:
+        chat_data: Данные для создания чата
+        db: Сессия базы данных
+        
+    Returns:
+        ChatResponse: Созданный чат
+        
+    Raises:
+        HTTPException: Если произошла ошибка при создании чата
+    """
+    try:
+        # Создаем новый чат
+        chat = Chat(
+            title=chat_data.title.strip(),
+        )
+        
+        db.add(chat)
+        db.commit()
+        db.refresh(chat)
+        
+        return ChatResponse(
+            id=chat.id,
+            title=chat.title,
+            created_at=chat.created_at,
+            message_count=0,
+        )
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Ошибка при создании чата: {str(e)}",
+        )
+
+
+@router.get(
+    "/{chat_id}",
+    response_model=ChatWithMessagesResponse,
+    summary="Получить чат с сообщениями",
+    description="""
+    Получает информацию о чате и последние сообщения.
+    
+    Параметры:
+    - limit: количество возвращаемых сообщений (по умолчанию 20, максимум 100)
+    
+    Сообщения возвращаются отсортированными по времени создания (сначала новые).
+    """,
+    responses={
+        200: {"description": "Чат и сообщения успешно получены"},
+        404: {"description": "Чат не найден"},
+        422: {"description": "Некорректный параметр limit"},
+    },
+)
+async def get_chat(
+    chat_id: int,
+    limit: Optional[int] = Query(
+        default=settings.DEFAULT_MESSAGES_LIMIT,
+        ge=1,
+        le=settings.MAX_MESSAGES_LIMIT,
+        description=f"Количество возвращаемых сообщений (1-{settings.MAX_MESSAGES_LIMIT})",
+    ),
+    db: Session = Depends(get_db),
+) -> ChatWithMessagesResponse:
+    """
+    Получить чат и последние сообщения.
+    
+    Args:
+        chat_id: Идентификатор чата
+        limit: Количество возвращаемых сообщений
+        db: Сессия базы данных
+        
+    Returns:
+        ChatWithMessagesResponse: Чат и список сообщений
+        
+    Raises:
+        HTTPException: Если чат не найден
+    """
+    # Получаем чат
+    chat = db.query(Chat).filter(Chat.id == chat_id).first()
+    if not chat:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Чат с id={chat_id} не найден",
+        )
+    
+    # Получаем последние сообщения
+    messages_query = (
+        db.query(Message)
+        .filter(Message.chat_id == chat_id)
+        .order_by(desc(Message.created_at))
+        .limit(limit)
+    )
+    
+    messages = messages_query.all()
+    
+    # Преобразуем сообщения в схему
+    message_responses = [
+        MessageResponse(
+            id=msg.id,
+            chat_id=msg.chat_id,
+            text=msg.text,
+            created_at=msg.created_at,
+        )
+        for msg in messages
+    ]
+    
+    # Получаем общее количество сообщений
+    total_messages = db.query(Message).filter(Message.chat_id == chat_id).count()
+    
+    return ChatWithMessagesResponse(
+        chat=ChatResponse(
+            id=chat.id,
+            title=chat.title,
+            created_at=chat.created_at,
+            message_count=total_messages,
+        ),
+        messages=message_responses,
+    )
+
+
+@router.delete(
+    "/{chat_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Удалить чат",
+    description="""
+    Удаляет чат вместе со всеми сообщениями.
+    
+    Удаление происходит каскадно: при удалении чата автоматически удаляются
+    все связанные с ним сообщения благодаря настройкам внешнего ключа в БД.
+    """,
+    responses={
+        204: {"description": "Чат успешно удален"},
+        404: {"description": "Чат не найден"},
+    },
+)
+async def delete_chat(
+    chat_id: int,
+    db: Session = Depends(get_db),
+) -> None:
+    """
+    Удалить чат и все его сообщения.
+    
+    Args:
+        chat_id: Идентификатор чата
+        db: Сессия базы данных
+        
+    Raises:
+        HTTPException: Если чат не найден
+    """
+    # Получаем чат
+    chat = db.query(Chat).filter(Chat.id == chat_id).first()
+    if not chat:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Чат с id={chat_id} не найден",
+        )
+    
+    try:
+        # Удаляем чат (сообщения удалятся каскадно)
+        db.delete(chat)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Ошибка при удалении чата: {str(e)}",
+        )
+
+
+# Опционально: эндпоинт для получения списка всех чатов
+@router.get(
+    "/",
+    response_model=list[ChatResponse],
+    summary="Получить список всех чатов",
+    description="Возвращает список всех чатов с информацией о количестве сообщений.",
+    responses={
+        200: {"description": "Список чатов успешно получен"},
+    },
+)
+async def get_all_chats(
+    skip: int = Query(0, ge=0, description="Количество пропускаемых записей"),
+    limit: int = Query(100, ge=1, le=1000, description="Количество возвращаемых записей"),
+    db: Session = Depends(get_db),
+) -> list[ChatResponse]:
+    """
+    Получить список всех чатов.
+    
+    Args:
+        skip: Количество пропускаемых записей (для пагинации)
+        limit: Количество возвращаемых записей
+        db: Сессия базы данных
+        
+    Returns:
+        List[ChatResponse]: Список чатов
+    """
+    chats = db.query(Chat).offset(skip).limit(limit).all()
+    
+    result = []
+    for chat in chats:
+        # Получаем количество сообщений для каждого чата
+        message_count = db.query(Message).filter(Message.chat_id == chat.id).count()
+        
+        result.append(
+            ChatResponse(
+                id=chat.id,
+                title=chat.title,
+                created_at=chat.created_at,
+                message_count=message_count,
+            )
+        )
+    
+    return result
+
+# Пример обновленного эндпоинта для создания чата (chats.py)
+@router.post(
+    "/",
+    response_model=ChatResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Создать новый чат"
+)
+async def create_chat(
+    chat_data: ChatCreate,
+    db: Session = Depends(get_db),
+) -> ChatResponse:
+    """
+    Создать новый чат с использованием CRUD.
+    """
+    try:
+        # Используем CRUD операцию
+        chat = chat_crud.create_with_validation(
+            db=db,
+            obj_in=chat_data
+        )
+        
+        return ChatResponse(
+            id=chat.id,
+            title=chat.title,
+            created_at=chat.created_at,
+            message_count=0,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(e),
+        )
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Ошибка при создании чата: {str(e)}",
+        )
+
+
+# Пример эндпоинта для получения чата с сообщениями
+@router.get(
+    "/{chat_id}",
+    response_model=ChatWithMessagesResponse
+)
+async def get_chat(
+    chat_id: int,
+    limit: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> ChatWithMessagesResponse:
+    """
+    Получить чат и последние сообщения с использованием CRUD.
+    """
+    # Используем CRUD для получения чата со статистикой
+    chat_data = chat_crud.get_chat_with_message_count(db=db, chat_id=chat_id)
+    
+    if not chat_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Чат с id={chat_id} не найден",
+        )
+    
+    chat, message_count = chat_data["chat"], chat_data["message_count"]
+    
+    # Используем CRUD для получения последних сообщений
+    messages = message_crud.get_latest_messages(
+        db=db,
+        chat_id=chat_id,
+        limit=limit
+    )
+    
+    # Преобразуем сообщения в схему
+    message_responses = [
+        MessageResponse(
+            id=msg.id,
+            chat_id=msg.chat_id,
+            text=msg.text,
+            created_at=msg.created_at,
+        )
+        for msg in messages
+    ]
+    
+    return ChatWithMessagesResponse(
+        chat=ChatResponse(
+            id=chat.id,
+            title=chat.title,
+            created_at=chat.created_at,
+            message_count=message_count,
+        ),
+        messages=message_responses,
+    )
