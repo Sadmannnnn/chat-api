@@ -1,0 +1,37 @@
+"""
+API версии 1.
+
+Эта версия содержит все эндпоинты, указанные в задании:
+- Создание чатов
+- Отправка сообщений
+- Получение чата с сообщениями
+- Удаление чатов
+
+А также дополнительные эндпоинты для удобства.
+"""
+
+__version__ = "1.0.0"
+__description__ = "API для управления чатами и сообщениями"
+
+from fastapi import APIRouter
+
+# Создаем основной маршрутизатор для v1
+api_router = APIRouter(prefix="/api/v1")
+
+# Импортируем и включаем маршрутизаторы из endpoints
+from app.api.v1.endpoints.chats import router as chats_router
+from app.api.v1.endpoints.messages import router as messages_router
+
+# Опционально: эндпоинты для проверки здоровья
+try:
+    from app.api.v1.endpoints.health import router as health_router
+    api_router.include_router(health_router, prefix="/health", tags=["Health"])
+except ImportError:
+    pass
+
+# Включаем маршрутизаторы
+api_router.include_router(chats_router, prefix="/chats", tags=["Chats"])
+api_router.include_router(messages_router, prefix="/messages", tags=["Messages"])
+
+# Экспорт основного маршрутизатора
+__all__ = ["api_router"]
