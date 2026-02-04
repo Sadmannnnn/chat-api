@@ -1,0 +1,92 @@
+from datetime import datetime
+from sqlalchemy import DateTime
+from sqlalchemy.orm import declarative_base, declared_attr
+from sqlalchemy.sql import func
+
+
+class CustomBase:
+    """
+    Базовый класс для всех моделей с общими атрибутами.
+    
+    Автоматически генерирует имя таблицы на основе имени класса
+    и добавляет общие поля.
+    """
+    
+    @declared_attr
+    def __tablename__(cls):
+        """
+        Автоматическое преобразование имени класса в snake_case для имени таблицы.
+        
+        Пример:
+            Chat -> chats
+            UserMessage -> user_messages
+        """
+        import re
+        # Преобразуем CamelCase в snake_case
+        name = cls.__name__
+        name = re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower()
+        # Добавляем 's' для множественного числа (простое правило)
+        if not name.endswith('s'):
+            name += 's'
+        return name
+    
+    # Общие поля для всех моделей
+    id: int
+    created_at: datetime
+
+
+# Создаем базовый класс для моделей SQLAlchemy
+Base = declarative_base(cls=CustomBase)
+
+
+class TimestampMixin:
+    """
+    Миксин для добавления временных меток создания и обновления.
+    
+    Атрибуты:
+        created_at: Дата и время создания записи
+        updated_at: Дата и время последнего обновления записи
+    """
+    
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        doc="Дата и время создания записи"
+    )
+    
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+        doc="Дата и время последнего обновления записи"
+    )
+
+
+class SoftDeleteMixin:
+    """
+    Миксин для мягкого удаления записей.
+    
+    Атрибуты:
+        is_deleted: Флаг удаления записи
+        deleted_at: Дата и время удаления записи
+    """
+    
+    is_deleted = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        doc="Флаг удаления записи (мягкое удаление)"
+    )
+    
+    deleted_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        doc="Дата и время удаления записи"
+    )
+
+
+# Импортируем здесь, чтобы избежать циклических импортов
+from sqlalchemy import Column, Integer, Boolean, String, Text, ForeignKey
+from sqlalchemy.orm import relationship
