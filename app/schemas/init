@@ -1,0 +1,36 @@
+"""
+Pydantic схемы для валидации и сериализации данных.
+
+Схемы разделены по назначению:
+- Create: для создания новых записей
+- Update: для обновления существующих записей
+- Response: для ответов API
+- Detailed: детализированные ответы с вложенными объектами
+"""
+
+from app.schemas.chat import (
+    ChatCreate,
+    ChatResponse,
+    ChatWithMessagesResponse,
+    ChatListResponse,
+    ChatListResponseItem,
+)
+from app.schemas.message import (
+    MessageCreate,
+    MessageResponse,
+    MessageListResponse,
+    MessageWithChatResponse,
+)
+
+# Экспорт всех схем для удобного импорта
+__all__ = [
+    "ChatCreate",
+    "ChatResponse",
+    "ChatWithMessagesResponse",
+    "ChatListResponse",
+    "ChatListResponseItem",
+    "MessageCreate",
+    "MessageResponse",
+    "MessageListResponse",
+    "MessageWithChatResponse",
+]
