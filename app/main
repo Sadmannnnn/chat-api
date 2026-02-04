@@ -1,0 +1,154 @@
+from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
+import logging
+
+from app import __version__, logger
+from app.config import settings
+from app.database import get_db, init_db
+from app.api.v1.endpoints import chats, messages
+
+# Инициализация FastAPI приложения
+app = FastAPI(
+    title=settings.APP_NAME,
+    version=__version__,
+    description="REST API для управления чатами и сообщениями",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+)
+
+# Настройка CORS (Cross-Origin Resource Sharing)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # В production укажите конкретные домены
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Действия при запуске приложения"""
+    logger.info(f"Starting {settings.APP_NAME} v{__version__}")
+    logger.info(f"Database URL: {settings.DATABASE_URL}")
+    
+    # Инициализация базы данных (в production используйте миграции)
+    # init_db()  # Раскомментируйте, если не используете миграции
+    
+    logger.info("Application started successfully")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Действия при остановке приложения"""
+    logger.info("Shutting down application...")
+
+
+@app.get("/", tags=["Health Check"])
+async def root():
+    """Корневой эндпоинт для проверки работы API"""
+    return {
+        "app": settings.APP_NAME,
+        "version": __version__,
+        "status": "running",
+        "docs": "/docs",
+    }
+
+
+@app.get("/health", tags=["Health Check"])
+async def health_check(db: Session = Depends(get_db)):
+    """
+    Проверка здоровья приложения.
+    
+    Проверяет:
+    1. Доступность приложения
+    2. Соединение с базой данных
+    """
+    try:
+        # Проверка соединения с базой данных
+        db.execute("SELECT 1")
+        return {
+            "status": "healthy",
+            "database": "connected",
+            "version": __version__,
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database connection failed",
+        )
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    """
+    Глобальный обработчик исключений.
+    
+    Логирует все необработанные исключения и возвращает 
+    стандартизированный ответ.
+    """
+    logger.error(f"Unhandled exception: {str(exc)}", exc_info=True)
+    
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "detail": "Internal server error",
+            "error": str(exc) if settings.DEBUG else "An unexpected error occurred",
+        },
+    )
+
+
+# Подключение эндпоинтов
+app.include_router(
+    chats.router,
+    prefix=settings.API_V1_PREFIX,
+    tags=["Chats"],
+)
+
+app.include_router(
+    messages.router,
+    prefix=settings.API_V1_PREFIX,
+    tags=["Messages"],
+)
+
+
+# Для отладки: эндпоинт для просмотра всех маршрутов
+@app.get("/routes", include_in_schema=False)
+async def list_routes():
+    """Возвращает список всех доступных маршрутов (только для отладки)"""
+    routes = []
+    for route in app.routes:
+        routes.append({
+            "path": route.path,
+            "name": route.name,
+            "methods": list(route.methods) if hasattr(route, "methods") else [],
+        })
+    return routes
+
+
+if __name__ == "__main__":
+    import uvicorn
+    
+    uvicorn.run(
+        "app.main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=settings.DEBUG,
+        log_level="info" if not settings.DEBUG else "debug",
+    )
+
+   # Добавьте в существующий main.py после импортов:
+
+# Импортируем основной маршрутизатор API v1
+from app.api.v1 import api_router
+
+# Включите маршрутизатор в приложение
+app.include_router(api_router)
+
+# Удалите или закомментируйте старые включения маршрутизаторов:
+# app.include_router(chats.router, ...)
+# app.include_router(messages.router, ...)
